@@ -13,8 +13,9 @@ from os import curdir, sep, path
 from subprocess import Popen
 from time import sleep, gmtime, strftime
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+from config import config
 ##############################################################################
-Version = "0.3.8"
+Version = "0.3.9"
 MySQL_Host = "10.128.2.252"
 MySQL_User = "homepi"
 MySQL_Pass = "raspberry!"
