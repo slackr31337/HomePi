@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 ##############################################################################
-import os, sys, time, datetime, argparse, math, decimal
+import os, sys, glob, time, datetime, argparse, math, decimal
 import threading, random, subprocess, string
 import cgi, urllib2, json, alsaaudio
 import MySQLdb as mydb
@@ -131,6 +131,29 @@ def GetTemps():
 	# id,inside,outside,humidy_in,humidy_out
 	query = ("SELECT * FROM `homepi`.`tempature` order by `time_stamp` desc limit 1;")
 	return DBQuery(1,query)
+##############################################################################	
+def ReadTempSensor(SensorNumber):
+	# DS18B20 Temperature Sensor
+	
+	base_dir = '/sys/bus/w1/devices/'
+	device_folder = glob.glob(base_dir + '28*')[0]
+	device_file = device_folder + '/w1_slave'
+	
+	f = open(device_file, 'r')
+	lines = f.readlines()
+	f.close()
+	
+	while lines[0].strip()[-3:] != 'YES':
+		time.sleep(0.2)
+		lines = read_temp_raw()
+		equals_pos = lines[1].find('t=')
+		
+	if equals_pos != -1:
+		temp_string = lines[1][equals_pos+2:]
+		temp_c = float(temp_string) / 1000.0
+		temp_f = temp_c * 9.0 / 5.0 + 32.0
+
+	return temp_c
 ##############################################################################
 def event_interrupt(event):
 	Pin_Value = pifacedigitalio.digital_read(event.pin_num, event.chip.hardware_addr)
@@ -200,7 +223,7 @@ def device_control(PiFace_ID,Pin_Value,AutoOff):
 		DBQuery(2,query)
 		
 		#if device is a light then turn off in X mins
-		if (int(PiFace_Status) == 0) and AutoOff:
+		if (int(PiFace_Status) ==0) and AutoOff:
 			dt = datetime.timedelta(minutes=LightsOff)
 			EventTime = datetime.datetime.now() + dt
 			query = ("INSERT INTO `homepi`.`event_action` (`piface_id`, `value`, `datetime`) VALUES (%d, 0, '%s');" % (PiFace_ID, EventTime))
@@ -335,7 +358,6 @@ def SetOccupied(Zone_ID):
 	time_now = strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
 	query = ("UPDATE `homepi`.`zones` SET `occupied`='1', `occupied_time`='%s' WHERE `id`=%d;" % (time_now, Zone_ID))
 	DBQuery(2,query)
-	
 	dt = datetime.timedelta(minutes=LightsOff)
 	EventTime = datetime.datetime.now() + dt
 	query = ("INSERT INTO `homepi`.`zone_action` (`zone_id`, `action_type`, `action_value`, `time_stamp`) VALUES (%d, 1, 0, '%s');" % (Zone_ID, EventTime))
@@ -438,7 +460,7 @@ def do_task(TaskType,TaskData):
 		
 	elif TaskType == 2:
 		#Data is shell code
-		# TODO santize command
+		# TODO input validation
 		subprocess.call(TaskData, shell=True)
 		
 	elif TaskType == 3:
@@ -537,15 +559,19 @@ def SetVolume(VolumeLevel):
 ##############################################################################	
 def GetForcast(Period):
 	global wunderground_api_key, wunderground_location
-	Forecast = "Error!"
 	openurl = "http://api.wunderground.com/api/%s/forecast/q/%s.json" % (wunderground_api_key,wunderground_location)
+	Forecast = "Error!"
 	try:
 		wurl = urllib2.urlopen(openurl)
 		json_string = wurl.read()
 		parsed_json = json.loads(json_string)
+		wurl.close()
+
 	except Exception, e:
-		ExceptionHand(e,"GetForcast ERROR.")
+		logging("GetForcast Failed! | %s." % (e))
+		return Forecast
 		pass
+	
 	if int(Period) < 9:
 		for data in parsed_json['forecast']['txt_forecast']['forecastday']:
 			if int(Period) == int(data['period']):
@@ -557,7 +583,7 @@ def GetForcast(Period):
 			if int(Period) == int(data['period']):
 				Forecast = data['conditions']
 				break
-	wurl.close()
+
 	return Forecast
 ##############################################################################
 def FixForcast(Forcast):
@@ -587,10 +613,17 @@ def FixForcast(Forcast):
 def UpdateSunRiseSet():
 	global wunderground_api_key, wunderground_location
 	openurl = "http://api.wunderground.com/api/%s/astronomy/q/%s.json" % (wunderground_api_key,wunderground_location)
-	wurl = urllib2.urlopen(openurl)
-	json_string = wurl.read()
-	parsed_json = json.loads(json_string)
-	
+	try:
+		wurl = urllib2.urlopen(openurl)
+		json_string = wurl.read()
+		parsed_json = json.loads(json_string)
+		wurl.close()
+	except Exception, e:
+                logging("GetForcast Failed! | %s." % (e))
+		return
+                pass
+
+
 	h = int(parsed_json['sun_phase']['sunrise']['hour'])
 	m = int(parsed_json['sun_phase']['sunrise']['minute'])
 	SunRise = "%02d:%02d:00" % (h,m)
@@ -599,7 +632,6 @@ def UpdateSunRiseSet():
 	m = int(parsed_json['sun_phase']['sunset']['minute'])
 	SunSet = "%02d:%02d:00" % (h,m)
 		
-	wurl.close()
 	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunrise';" % SunRise)
 	DBQuery(2,query)
 	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunset';" % SunSet)
