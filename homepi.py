@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 ##############################################################################
-import os, sys, glob, time, datetime, argparse, math, decimal
+import os, sys, time, datetime, argparse, math, decimal
 import threading, random, subprocess, string
 import cgi, urllib2, json, alsaaudio
 import MySQLdb as mydb
@@ -13,9 +13,8 @@ from os import curdir, sep, path
 from subprocess import Popen
 from time import sleep, gmtime, strftime
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-import config
 ##############################################################################
-Version = "0.3.9"
+Version = "0.4.0"
 MySQL_Host = "10.128.2.252"
 MySQL_User = "homepi"
 MySQL_Pass = "raspberry!"
@@ -89,14 +88,11 @@ def set_thermostat(temp):
 def thermostat_check():
 	global OnValue, OffValue
 	global FuranceRunning, Furance_ID, Thermostat_Temp
+	
 	#get current outside and inside temperature
-	temps = GetTemps()
-	if not (temps):
-		return
-		
-	for temp in temps:
-		temp_inside = int(temp[1])
-		temp_outside = int(temp[2])
+	temp_inside = GetTemp(GetConfig("inside_zone"))
+	temp_outside = GetTemp(GetConfig("outside_zone"))
+	
 	
 	if temp_outside > 66 and FuranceRunning:
 		logging("Info: Outside temperature is too high to run furnace!")
@@ -104,15 +100,16 @@ def thermostat_check():
 		return
 				
 	thermostat_onat = int(GetConfig("thermostat_temp"))
-	temp_limit1 = int(GetConfig("thermostat_limit1"))
-	temp_limit2 = int(GetConfig("thermostat_limit2"))
+	temp_limit_upper = int(GetConfig("thermostat_limit_upper"))
+	thermostat_limit_lower = int(GetConfig("thermostat_limit_lower"))
 	
-	if thermostat_onat > temp_limit1:
-		thermostat_onat = temp_limit1
-		set_thermostat(temp_limit1)
-	elif thermostat_onat < temp_limit2:
-		thermostat_onat = temp_limit2
-		set_thermostat(temp_limit2)
+	if thermostat_onat > temp_limit_upper:
+		thermostat_onat = temp_limit_upper
+		set_thermostat(temp_limit_upper)
+	elif thermostat_onat < thermostat_limit_lower:
+		thermostat_onat = thermostat_limit_lower
+		set_thermostat(thermostat_limit_lower)
+		
 	thermostat_offat = (thermostat_onat + 1)
 		
 	if Thermostat_Temp != thermostat_onat:
@@ -128,33 +125,21 @@ def thermostat_check():
 		logging("Info: The current temperature inside is %s F, outside %s F." % (temp_inside,temp_outside))	
 	return
 ##############################################################################
-def GetTemps():
-	# id,inside,outside,humidy_in,humidy_out
-	query = ("SELECT * FROM `homepi`.`tempature` order by `time_stamp` desc limit 1;")
-	return DBQuery(1,query)
-##############################################################################	
-def ReadTempSensor(SensorNumber):
-	# DS18B20 Temperature Sensor
-	
-	base_dir = '/sys/bus/w1/devices/'
-	device_folder = glob.glob(base_dir + '28*')[0]
-	device_file = device_folder + '/w1_slave'
-	
-	f = open(device_file, 'r')
-	lines = f.readlines()
-	f.close()
-	
-	while lines[0].strip()[-3:] != 'YES':
-		time.sleep(0.2)
-		lines = read_temp_raw()
-		equals_pos = lines[1].find('t=')
+def GetTemp(zone_id):
+	ZoneTemp = 0
+	query = ("SELECT `temp` FROM `homepi`.`tempzone` WHERE `zone_id`=%s order by `date_time` desc limit 1;" % zone_id)
+	rows = DBQuery(1,query)
+	if not (rows):
+		logging("Error: GetTemp | %s." % query)
+		return
 		
-	if equals_pos != -1:
-		temp_string = lines[1][equals_pos+2:]
-		temp_c = float(temp_string) / 1000.0
-		temp_f = temp_c * 9.0 / 5.0 + 32.0
-
-	return temp_c
+	for row in rows:
+		ZoneTemp = int(row[0])
+		
+	if GetConfig("temp_mode") == "F":
+		ZoneTemp = C2F(int(row[0]))
+		
+	return ZoneTemp
 ##############################################################################
 def event_interrupt(event):
 	Pin_Value = pifacedigitalio.digital_read(event.pin_num, event.chip.hardware_addr)
@@ -224,7 +209,7 @@ def device_control(PiFace_ID,Pin_Value,AutoOff):
 		DBQuery(2,query)
 		
 		#if device is a light then turn off in X mins
-		if (int(PiFace_Status) ==0) and AutoOff:
+		if (int(PiFace_Status) == 0) and AutoOff:
 			dt = datetime.timedelta(minutes=LightsOff)
 			EventTime = datetime.datetime.now() + dt
 			query = ("INSERT INTO `homepi`.`event_action` (`piface_id`, `value`, `datetime`) VALUES (%d, 0, '%s');" % (PiFace_ID, EventTime))
@@ -359,6 +344,7 @@ def SetOccupied(Zone_ID):
 	time_now = strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
 	query = ("UPDATE `homepi`.`zones` SET `occupied`='1', `occupied_time`='%s' WHERE `id`=%d;" % (time_now, Zone_ID))
 	DBQuery(2,query)
+	
 	dt = datetime.timedelta(minutes=LightsOff)
 	EventTime = datetime.datetime.now() + dt
 	query = ("INSERT INTO `homepi`.`zone_action` (`zone_id`, `action_type`, `action_value`, `time_stamp`) VALUES (%d, 1, 0, '%s');" % (Zone_ID, EventTime))
@@ -461,7 +447,7 @@ def do_task(TaskType,TaskData):
 		
 	elif TaskType == 2:
 		#Data is shell code
-		# TODO input validation
+		# TODO santize command
 		subprocess.call(TaskData, shell=True)
 		
 	elif TaskType == 3:
@@ -479,19 +465,18 @@ def do_task(TaskType,TaskData):
 	elif TaskType == 6:
 		#AM/PM Greeting and Weather
 		SpeakTime = strftime("%I %M %p", time.localtime(time.time()))
-		Forecast = GetForcast(TaskData)
-		
+				
 		if int(GetHour()) < 12:
 			Speak("Good Morning. Today is %s." % (datetime.date.today().strftime("%A, %B %d")))
 		else:
 			Speak("Good Evening.")
+			
 		Speak("The time is now %s." % (SpeakTime.lstrip('0')))
-		Speak("The weather forecast is %s." % FixForcast(Forecast))
-		temps = False
-		while not (temps):
-			temps = GetTemps()
-		for temp in temps:
-			OutsideTemp = int(temp[2])
+		Forecast = GetForcast(TaskData)
+		if (Forecast):
+			Speak("The weather forecast is %s." % FixForcast(Forecast))
+
+		OutsideTemp = GetTemp(GetConfig("outside_zone"))
 		Speak("The conditions outside are %s with a temperature of %s degrees." % (GetForcast(9),OutsideTemp))
 		
 	elif TaskType == 7:
@@ -505,13 +490,16 @@ def do_task(TaskType,TaskData):
 	return
 ##############################################################################
 def hour_check():
-	temps = False
-	while not (temps):
-		temps = GetTemps()
+	#temps = False
+	#while not (temps):
+	#	temps = GetTemps()
 		
-	for temp in temps:
-		InsideTemp = int(temp[1])
-		OutsideTemp = int(temp[2])
+	#for temp in temps:
+	#	InsideTemp = int(temp[1])
+	#	OutsideTemp = int(temp[2])
+	
+	InsideTemp = GetTemp(GetConfig("inside_zone"))
+	OutsideTemp = GetTemp(GetConfig("outside_zone"))
 		
 	ModeID = int(GetHouseMode())
 	
@@ -560,19 +548,17 @@ def SetVolume(VolumeLevel):
 ##############################################################################	
 def GetForcast(Period):
 	global wunderground_api_key, wunderground_location
-	openurl = "http://api.wunderground.com/api/%s/forecast/q/%s.json" % (wunderground_api_key,wunderground_location)
 	Forecast = "Error!"
+	openurl = "http://api.wunderground.com/api/%s/forecast/q/%s.json" % (wunderground_api_key,wunderground_location)
 	try:
 		wurl = urllib2.urlopen(openurl)
 		json_string = wurl.read()
+		if not (json_string):
+			return Forecast		
 		parsed_json = json.loads(json_string)
-		wurl.close()
-
 	except Exception, e:
-		logging("GetForcast Failed! | %s." % (e))
-		return Forecast
-		pass
-	
+		ExceptionHand(e,"GetForcast ERROR.")
+		return Forecast	
 	if int(Period) < 9:
 		for data in parsed_json['forecast']['txt_forecast']['forecastday']:
 			if int(Period) == int(data['period']):
@@ -584,10 +570,12 @@ def GetForcast(Period):
 			if int(Period) == int(data['period']):
 				Forecast = data['conditions']
 				break
-
+	wurl.close()
 	return Forecast
 ##############################################################################
 def FixForcast(Forcast):
+	#if (Forecast):	
+	#	return
 	#Format words for speech 
 	dict = {
 		'in.':'inches',
@@ -617,14 +605,14 @@ def UpdateSunRiseSet():
 	try:
 		wurl = urllib2.urlopen(openurl)
 		json_string = wurl.read()
-		parsed_json = json.loads(json_string)
-		wurl.close()
+		if not json_string:
+			return	
 	except Exception, e:
-                logging("GetForcast Failed! | %s." % (e))
-		return
-                pass
-
-
+                ExceptionHand(e,"UpdateSunRiseSet | %s." % (e))
+                return 
+	
+	parsed_json = json.loads(json_string)
+	
 	h = int(parsed_json['sun_phase']['sunrise']['hour'])
 	m = int(parsed_json['sun_phase']['sunrise']['minute'])
 	SunRise = "%02d:%02d:00" % (h,m)
@@ -633,6 +621,7 @@ def UpdateSunRiseSet():
 	m = int(parsed_json['sun_phase']['sunset']['minute'])
 	SunSet = "%02d:%02d:00" % (h,m)
 		
+	wurl.close()
 	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunrise';" % SunRise)
 	DBQuery(2,query)
 	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunset';" % SunSet)
@@ -670,29 +659,42 @@ def GetDevicebyID(PiFace_ID):
 	return DBQuery(0,query)
 ##############################################################################
 def DBQuery(Type,Query):
-	global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
-	db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
-	cur = mydb.cursors.Cursor(db)	
-	try:
-		cur.execute(Query)
-		if Type == 0:
-			results = cur.fetchone()
-		elif Type == 1:
-			results = cur.fetchall()
-		elif Type == 2:
-			db.commit()
-			results = True
-	except Exception, e:
-		ExceptionHand(e,"DBQuery | %s." % (Query))
-		results = False
-		pass
-		
-	if results == None:
-		logging("Database Query Failed! | %s." % (Query))
-		results = False
-	cur.close()
-	return results
+        global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
+
+        DB_Connected = False
+        while not DB_Connected:
+			#db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
+			try:
+				db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
+				cur = mydb.cursors.Cursor(db)
+				DB_Connected = True
+			except Exception, e:
+				ExceptionHand(e,"DBQuery | Unable to connect! Retrying!")
+				DB_Connected= False
+				time.sleep(120)
+				pass
+
+        try:
+			cur.execute(Query)
+			if Type == 0:
+					results = cur.fetchone()
+			elif Type == 1:
+					results = cur.fetchall()
+			elif Type == 2:
+					db.commit()
+					results = True
+        except Exception, e:
+			ExceptionHand(e,"DBQuery | %s." % (Query))
+			results = False
+			pass
+
+        if results == None:
+			logging("Database Query Failed! | %s." % (Query))
+			results = False
+        cur.close()
+        return results
 ##############################################################################
+
 def dbinit():
 	global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
 	global db
