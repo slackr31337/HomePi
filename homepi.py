@@ -14,11 +14,12 @@ from subprocess import Popen
 from time import sleep, gmtime, strftime
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 ##############################################################################
-Version = "0.4.0"
+Version = "0.4.1"
 MySQL_Host = "10.128.2.252"
 MySQL_User = "homepi"
 MySQL_Pass = "raspberry!"
 MySQL_DB = "homepi"
+LOG_FILE = "/var/log/homepi.log"
 ##############################################################################
 class HTTP_Handler(BaseHTTPRequestHandler):
 	def do_GET(self):
@@ -141,6 +142,29 @@ def GetTemp(zone_id):
 		
 	return ZoneTemp
 ##############################################################################
+def ReadTempSensor(SensorNumber):
+	# DS18B20 Temperature Sensor
+	
+	base_dir = '/sys/bus/w1/devices/'
+	device_folder = glob.glob(base_dir + '28*')[0]
+	device_file = device_folder + '/w1_slave'
+	
+	f = open(device_file, 'r')
+	lines = f.readlines()
+	f.close()
+	
+	while lines[0].strip()[-3:] != 'YES':
+		time.sleep(0.2)
+		lines = read_temp_raw()
+		equals_pos = lines[1].find('t=')
+		
+	if equals_pos != -1:
+		temp_string = lines[1][equals_pos+2:]
+		temp_c = float(temp_string) / 1000.0
+		temp_f = temp_c * 9.0 / 5.0 + 32.0
+
+	return temp_c
+############################################################################## 
 def event_interrupt(event):
 	Pin_Value = pifacedigitalio.digital_read(event.pin_num, event.chip.hardware_addr)
 	logging("Event Interrupt: Board: %d Pin: %d Value: %d Direction: %d" % (event.chip.hardware_addr,event.pin_num,Pin_Value,event.direction))
@@ -316,7 +340,7 @@ def MotionInZone(Zone_ID):
 	elif ModeID == 2:
 		#If Occupied check zone occupied
 		if not Zone_Occupied: 
-				SetOccupied(Zone_ID)
+			SetOccupied(Zone_ID)
 		else:
 			ExtendOccupied(Zone_ID)
 		
@@ -388,6 +412,9 @@ def GetZoneName(Zone_ID):
 	Zone_Name = "Unknown"
 	query = ("SELECT `id`,`name` FROM `homepi`.`zones` WHERE `id`=%d;" % Zone_ID)
 	row = DBQuery(0,query)
+	if not (row):
+		logging("ERROR: Failed to GetZoneName!")
+		return 
 	return str(row[1])
 ##############################################################################
 def SetMode(SetMode):
@@ -490,14 +517,6 @@ def do_task(TaskType,TaskData):
 	return
 ##############################################################################
 def hour_check():
-	#temps = False
-	#while not (temps):
-	#	temps = GetTemps()
-		
-	#for temp in temps:
-	#	InsideTemp = int(temp[1])
-	#	OutsideTemp = int(temp[2])
-	
 	InsideTemp = GetTemp(GetConfig("inside_zone"))
 	OutsideTemp = GetTemp(GetConfig("outside_zone"))
 		
@@ -671,7 +690,7 @@ def DBQuery(Type,Query):
 			except Exception, e:
 				ExceptionHand(e,"DBQuery | Unable to connect! Retrying!")
 				DB_Connected= False
-				time.sleep(120)
+				time.sleep(30)
 				pass
 
         try:
@@ -683,6 +702,8 @@ def DBQuery(Type,Query):
 			elif Type == 2:
 					db.commit()
 					results = True
+			cur.close()
+			
         except Exception, e:
 			ExceptionHand(e,"DBQuery | %s." % (Query))
 			results = False
@@ -691,10 +712,8 @@ def DBQuery(Type,Query):
         if results == None:
 			logging("Database Query Failed! | %s." % (Query))
 			results = False
-        cur.close()
         return results
 ##############################################################################
-
 def dbinit():
 	global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
 	global db
@@ -710,12 +729,23 @@ def dbinit():
 		print "Error dbinit | %d: %s" % (e.args[0],e.args[1])	
 		cur.close()
 		return False
-		
 	return True
 ##############################################################################
 def logging(Message):
+	global LOG_FILE
+	LOG_TEXT = "%s : %s" % (strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), Message)
 	#Stdout to shell
-	print strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), ":", Message
+	#print strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), ":", Message
+	#Write to logfile
+	try:
+		target = open(LOG_FILE, 'a')
+		target.truncate()
+		target.write(LOG_TEXT)
+		target.write("\n")
+		target.close()
+	except Exception, e:
+		ExceptionHand(e,"Log Write | %s." % (LOG_FILE))
+		pass
 	#logging events to database
 	HostName = "homepi"
 	query = ('INSERT INTO `homepi`.`logging` (`board`, `message`) VALUES ("%s", "%s");' % (HostName, Message))
@@ -763,9 +793,7 @@ def Main():
 	global Speaking, OnValue, OffValue
 	global wunderground_api_key, wunderground_location
 	
-	print ("##############################################################")
 	print ("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
-	print ("##############################################################")
 	Today = datetime.datetime.today().weekday()
 	OnOff = {0:'off',1:'on'}
 	OnValue = 1
@@ -775,6 +803,9 @@ def Main():
 	Speaking = False
 	db = False	
 	logging("HomePi Startup.")
+	logging("##############################################################")
+	logging("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
+	logging("##############################################################")
 	query = ("SELECT piface.id, piface.board, piface.pin, piface.status FROM piface INNER JOIN devices ON piface.device=devices.id WHERE devices.name = 'thermostat';")	
 	row = DBQuery(0,query)
 	#Thermostat
