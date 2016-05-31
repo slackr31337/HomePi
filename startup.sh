@@ -5,6 +5,6 @@ sleep 10
 
 cd /home/pi
 while true; do
-        sudo /home/pi/homepi.py
+        sudo -u pi /home/pi/homepi.py
 done
 
