@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 ##############################################################################
-import os, sys, time, datetime, argparse, math, decimal
+import os, sys, time, datetime, argparse, math, decimal, re
 import threading, random, subprocess, string
 import cgi, urllib2, json, alsaaudio
 import MySQLdb as mydb
@@ -20,6 +20,9 @@ MySQL_User = "homepi"
 MySQL_Pass = "raspberry!"
 MySQL_DB = "homepi"
 LOG_FILE = "/var/log/homepi.log"
+STDOUT_SHELL = False
+DEBUG_LOG = False
+DB_ERROR = False
 ##############################################################################
 class HTTP_Handler(BaseHTTPRequestHandler):
 	def do_GET(self):
@@ -53,7 +56,7 @@ def HTTP_Server():
 	#Start HTTP server to serve requests from web frontend
 	try:
 		srv = HTTPServer(('', HTTP_Port), HTTP_Handler)
-	except Exception, e:
+	except BaseException, e:
 		ExceptionHand(e,"HTTP_Server")
 		return
 	should_stop = False
@@ -75,7 +78,8 @@ def thermostat_control(furnace_value):
 	global FuranceRunning, Furnace_Pin, Furnace_Board, Furnace_ID
 	OnOff = {0:'off',1:'on'}
 	pifacedigitalio.digital_write(Furnace_Pin, furnace_value, Furnace_Board)
-	#logging("Action: Thermostat output on pin %s is set to %s." % (Furnace_Pin, OnOff[int(furnace_value)]))
+	if DEBUG_LOG:
+		logging("Action: Thermostat output on pin %s is set to %s." % (Furnace_Pin, OnOff[int(furnace_value)]))
 	query = ("UPDATE `homepi`.`piface` SET `status`=%d WHERE `id`=%d;" % (furnace_value, Furnace_ID))
 	DBQuery(2,query)
 	FuranceRunning = bool(furnace_value)
@@ -262,7 +266,8 @@ def event_check():
 	event_start = datetime.datetime.now()
 	dt = datetime.timedelta (seconds=60)
 	event_end = event_start + dt
-	#print "Checking events between %s and %s" % (event_start, event_end)
+	if DEBUG_LOG:
+		logging("Checking events between %s and %s" % (event_start, event_end))
 	query = ("SELECT DISTINCT * FROM `homepi`.`event_action` WHERE `datetime` BETWEEN '%s' AND '%s' LIMIT 4;" % (event_start,  event_end))
 	rows = DBQuery(1,query)
 	if (rows):
@@ -575,8 +580,8 @@ def GetForcast(Period):
 		if not (json_string):
 			return Forecast		
 		parsed_json = json.loads(json_string)
-	except Exception, e:
-		ExceptionHand(e,"GetForcast ERROR.")
+	except BaseException, e:
+		ExceptionHand(e,"GetForcast")
 		return Forecast	
 	if int(Period) < 9:
 		for data in parsed_json['forecast']['txt_forecast']['forecastday']:
@@ -593,8 +598,6 @@ def GetForcast(Period):
 	return Forecast
 ##############################################################################
 def FixForcast(Forcast):
-	#if (Forecast):	
-	#	return
 	#Format words for speech 
 	dict = {
 		'in.':'inches',
@@ -621,14 +624,16 @@ def FixForcast(Forcast):
 def UpdateSunRiseSet():
 	global wunderground_api_key, wunderground_location
 	openurl = "http://api.wunderground.com/api/%s/astronomy/q/%s.json" % (wunderground_api_key,wunderground_location)
+	logging("Update: Downloading Sun Rise/Sun Set for today using location %s." % (wunderground_location))
 	try:
 		wurl = urllib2.urlopen(openurl)
 		json_string = wurl.read()
 		if not json_string:
+			logging("Error: UpdateSunRiseSet | Invalid json string.")
 			return	
-	except Exception, e:
-                ExceptionHand(e,"UpdateSunRiseSet | %s." % (e))
-                return 
+	except BaseException, e:
+		ExceptionHand(e,"UpdateSunRiseSet")
+		return 
 	
 	parsed_json = json.loads(json_string)
 	
@@ -678,45 +683,44 @@ def GetDevicebyID(PiFace_ID):
 	return DBQuery(0,query)
 ##############################################################################
 def DBQuery(Type,Query):
-        global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
-
-        DB_Connected = False
-        while not DB_Connected:
-			#db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
-			try:
-				db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
-				cur = mydb.cursors.Cursor(db)
-				DB_Connected = True
-			except Exception, e:
-				ExceptionHand(e,"DBQuery | Unable to connect! Retrying!")
-				DB_Connected= False
-				time.sleep(30)
-				pass
-
-        try:
-			cur.execute(Query)
-			if Type == 0:
-					results = cur.fetchone()
-			elif Type == 1:
-					results = cur.fetchall()
-			elif Type == 2:
-					db.commit()
-					results = True
-			cur.close()
-			
-        except Exception, e:
-			ExceptionHand(e,"DBQuery | %s." % (Query))
-			results = False
+	global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
+	retry_seconds = 30
+	DB_Connected = False
+	while not DB_Connected:
+		try:
+			db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
+			cur = mydb.cursors.Cursor(db)
+			DB_Connected = True
+		except BaseException, e:
+			ExceptionHand(e,"DBQuery | Unable to connect to database %s. Retrying againin %d seconds!" % (MySQL_DB,retry_seconds))
+			DB_Connected= False
+			time.sleep(retry_seconds)
 			pass
 
-        if results == None:
-			logging("Database Query Failed! | %s." % (Query))
-			results = False
-        return results
+	try:
+		cur.execute(Query)
+		if Type == 0:
+				results = cur.fetchone()
+		elif Type == 1:
+				results = cur.fetchall()
+		elif Type == 2:
+				db.commit()
+				results = True
+		cur.close()
+		
+	except BaseException, e:
+		ExceptionHand(e,"DBQuery | %s." % (Query))
+		results = False
+		pass
+
+	if results == None:
+		logging("Database Query Failed! | %s." % (Query))
+		results = False
+	return results
 ##############################################################################
 def dbinit():
 	global MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB
-	global db
+	global DB_ERROR, db
 	try:
 		db = mydb.connect(MySQL_Host, MySQL_User, MySQL_Pass, MySQL_DB)
 		cur = mydb.cursors.Cursor(db)
@@ -726,16 +730,21 @@ def dbinit():
 		ver = str(row[0])
 		logging("Config: Connected to MySQL Server at %s, version %s " % (MySQL_Host, ver))
 	except mydb.Error, e:
-		print "Error dbinit | %d: %s" % (e.args[0],e.args[1])	
+		DB_ERROR = True
+		logging("Error dbinit | %d: %s" % (e.args[0],e.args[1]))
 		cur.close()
 		return False
 	return True
 ##############################################################################
 def logging(Message):
-	global LOG_FILE
+	global STDOUT_SHELL, LOG_FILE, DB_ERROR
+	
 	LOG_TEXT = "%s : %s" % (strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), Message)
-	#Stdout to shell
-	#print strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), ":", Message
+	
+	if STDOUT_SHELL:
+		#Stdout to shell
+		print strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), ":", Message
+	
 	#Write to logfile
 	try:
 		target = open(LOG_FILE, 'a')
@@ -743,24 +752,30 @@ def logging(Message):
 		target.write(LOG_TEXT)
 		target.write("\n")
 		target.close()
-	except Exception, e:
+	except BaseException, e:
 		ExceptionHand(e,"Log Write | %s." % (LOG_FILE))
 		pass
-	#logging events to database
-	HostName = "homepi"
-	query = ('INSERT INTO `homepi`.`logging` (`board`, `message`) VALUES ("%s", "%s");' % (HostName, Message))
-	DBQuery(2,query)
+		
+	if not DB_ERROR:
+		#logging events to database
+		HostName = "homepi"
+		query = ('INSERT INTO `homepi`.`logging` (`board`, `message`) VALUES ("%s", "%s");' % (HostName, Message))
+		DBQuery(2,query)
 	return
 ##############################################################################	
 def ExceptionHand(error,called_from):
-	print "Error %s | %s." % (called_from,error)
+	global DB_ERROR
+	DB_ERROR = True
+	logging("Error: %s  %s %s." % (called_from,sys.exc_info()[0],error))
+	if not (error.args):
+		return
 	if (error.args[0] == 2013) or (error.args[0] == 2006):
 		DataBaseReady = False
 		while not DataBaseReady:
-			print "Attempting to reconnect to database..."
 			sleep(1)
 			DataBaseReady = dbinit()
-		print "Success! Connected to MySQL Server at %s." % MySQL_Host
+		DB_ERROR = False
+		logging("Success! Connected to MySQL Server at %s." % MySQL_Host)
 	return
 ##############################################################################
 def GetMinute():
@@ -792,8 +807,9 @@ def Main():
 	global pfd, PiFace_Boards, PiFace_Inputs
 	global Speaking, OnValue, OffValue
 	global wunderground_api_key, wunderground_location
-	
-	print ("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
+	if DEBUG_LOG:
+		print ("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
+		print ("HomePi Startup.")
 	Today = datetime.datetime.today().weekday()
 	OnOff = {0:'off',1:'on'}
 	OnValue = 1
@@ -804,8 +820,9 @@ def Main():
 	db = False	
 	logging("HomePi Startup.")
 	logging("##############################################################")
-	logging("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
+	logging("HomePi Version %s | 2013-10-19 - 2016-05-28 Robert Dunmire III" % Version)
 	logging("##############################################################")
+	logging("Config: Attempting to init database connection.")
 	query = ("SELECT piface.id, piface.board, piface.pin, piface.status FROM piface INNER JOIN devices ON piface.device=devices.id WHERE devices.name = 'thermostat';")	
 	row = DBQuery(0,query)
 	#Thermostat
