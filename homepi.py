@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 ##############################################################################
-import os, sys, time, datetime, argparse, math, decimal, re
+import os, sys, socket, time, datetime, argparse, math, decimal, re
 import threading, random, subprocess, string
 import cgi, urllib2, json, alsaaudio
 import MySQLdb as mydb
@@ -14,7 +14,7 @@ from subprocess import Popen
 from time import sleep, gmtime, strftime
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 ##############################################################################
-Version = "0.4.1"
+Version = "0.4.2"
 MySQL_Host = "10.128.2.252"
 MySQL_User = "homepi"
 MySQL_Pass = "raspberry!"
@@ -737,7 +737,7 @@ def dbinit():
 	return True
 ##############################################################################
 def logging(Message):
-	global STDOUT_SHELL, LOG_FILE, DB_ERROR
+	global HostName, STDOUT_SHELL, LOG_FILE, DB_ERROR
 	
 	LOG_TEXT = "%s : %s" % (strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), Message)
 	
@@ -758,7 +758,6 @@ def logging(Message):
 		
 	if not DB_ERROR:
 		#logging events to database
-		HostName = "homepi"
 		query = ('INSERT INTO `homepi`.`logging` (`board`, `message`) VALUES ("%s", "%s");' % (HostName, Message))
 		DBQuery(2,query)
 	return
@@ -801,12 +800,13 @@ def SendMessage(Body,Subject):
 # Main 
 ##############################################################################
 def Main():
-	global Version, should_stop, HTTP_Port, db, Today
+	global HostName, Version, should_stop, HTTP_Port, db, Today
 	global FuranceRunning, Thermostat_Temp, LightsOff, DELAY, Mode
 	global Furnace_Pin, Furnace_Board, Furnace_ID
 	global pfd, PiFace_Boards, PiFace_Inputs
 	global Speaking, OnValue, OffValue
 	global wunderground_api_key, wunderground_location
+	HostName = socket.gethostname()
 	if DEBUG_LOG:
 		print ("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
 		print ("HomePi Startup.")
