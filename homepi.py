@@ -7,19 +7,20 @@ import MySQLdb as mydb
 import pifacecommon, pifacedigitalio
 import pifacedigitalio.version as pfdioV
 import pifacecommon.version as pfcV
-import smtplib
+import ConfigParser, smtplib
 from email.mime.text import	MIMEText
 from os import curdir, sep, path
 from subprocess import Popen
 from time import sleep, gmtime, strftime
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-##############################################################################
+Config = ConfigParser.ConfigParser()
+Config.read("config.ini")
 Version = "0.4.2"
-MySQL_Host = "10.128.2.252"
-MySQL_User = "homepi"
-MySQL_Pass = "raspberry!"
-MySQL_DB = "homepi"
-LOG_FILE = "/var/log/homepi.log"
+MySQL_Host = Config.get('db', 'host')
+MySQL_User = Config.get('db', 'login')
+MySQL_Pass = Config.get('db', 'pass')
+MySQL_DB = Config.get('db', 'db')
+LOG_FILE = Config.get('log', 'file')
 STDOUT_SHELL = False
 DEBUG_LOG = False
 DB_ERROR = False
@@ -807,9 +808,6 @@ def Main():
 	global Speaking, OnValue, OffValue
 	global wunderground_api_key, wunderground_location
 	HostName = socket.gethostname()
-	if DEBUG_LOG:
-		print ("HomePi Version %s | 2013-10-19 Robert Dunmire III" % Version)
-		print ("HomePi Startup.")
 	Today = datetime.datetime.today().weekday()
 	OnOff = {0:'off',1:'on'}
 	OnValue = 1
@@ -818,10 +816,13 @@ def Main():
 	should_stop = False
 	Speaking = False
 	db = False	
-	logging("HomePi Startup.")
+	StartupMsg = "HomePi Version %s | 2013-10-19 - 2016-6-26 Robert Dunmire III" % Version
+	if DEBUG_LOG:
+		print (StartupMsg)
 	logging("##############################################################")
-	logging("HomePi Version %s | 2013-10-19 - 2016-05-28 Robert Dunmire III" % Version)
+	logging(StartupMsg)
 	logging("##############################################################")
+	logging("Startup: HomePi Starting on node %s." % HostName)
 	logging("Config: Attempting to init database connection.")
 	query = ("SELECT piface.id, piface.board, piface.pin, piface.status FROM piface INNER JOIN devices ON piface.device=devices.id WHERE devices.name = 'thermostat';")	
 	row = DBQuery(0,query)
