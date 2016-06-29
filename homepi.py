@@ -40,6 +40,7 @@ class HTTP_Handler(BaseHTTPRequestHandler):
 				status = datastring[3]
 				status = string.lower(status)
 				PiFace_Pin = int(datastring[4])
+				#TODO Use RabbitMQ to send command to piface controller
 				if PiFace_Board != "":
 					if status == "on":
 						pifacedigitalio.digital_write(PiFace_Pin, 1, PiFace_Board)
@@ -88,7 +89,7 @@ def thermostat_control(furnace_value):
 	return
 ##############################################################################
 def set_thermostat(temp):
-	query = ("UPDATE `homepi`.`config` SET `data`=%d WHERE `name`='thermostat_temp';" % (temp))
+	query = ("UPDATE `homepi`.`config` SET `data`=%d WHERE `name`='thermostat_temp' AND `node`='%s';" % (temp, HostName))
 	return DBQuery(2,query)
 ##############################################################################
 def thermostat_check():
@@ -623,7 +624,7 @@ def FixForcast(Forcast):
 	return Forcast
 ##############################################################################
 def UpdateSunRiseSet():
-	global wunderground_api_key, wunderground_location
+	global HostName, wunderground_api_key, wunderground_location
 	openurl = "http://api.wunderground.com/api/%s/astronomy/q/%s.json" % (wunderground_api_key,wunderground_location)
 	logging("Update: Downloading Sun Rise/Sun Set for today using location %s." % (wunderground_location))
 	try:
@@ -647,9 +648,9 @@ def UpdateSunRiseSet():
 	SunSet = "%02d:%02d:00" % (h,m)
 		
 	wurl.close()
-	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunrise';" % SunRise)
+	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunrise' AND `node`='%s';" % (SunRise, HostName))
 	DBQuery(2,query)
-	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunset';" % SunSet)
+	query = ("UPDATE `homepi`.`config` SET `data`='%s' WHERE `name`='sunset' AND `node`='%s';" % (SunSet, HostName))
 	DBQuery(2,query)
 	logging("Config: Updated sunrise/sunset to %s/%s." % (SunRise, SunSet))
 	
@@ -675,12 +676,14 @@ def CheckUsers():
 	return
 ##############################################################################
 def GetConfig(ConfigName):
-	query = ("SELECT `data` FROM `homepi`.`config` WHERE `name`='%s';" % ConfigName)
+	global HostName
+	query = ("SELECT `data` FROM `homepi`.`config` WHERE `name`='%s' AND `node`='%s';" % (ConfigName, HostName))
 	row = DBQuery(0,query)
 	return row[0]
 ##############################################################################
 def GetDevicebyID(PiFace_ID):
-	query = ("SELECT * FROM `homepi`.`piface` WHERE `id`=%d;" % PiFace_ID)	
+	global HostName
+	query = ("SELECT * FROM `homepi`.`piface` WHERE `id`=%d AND `node`='s';" % (PiFace_ID, HostName))	
 	return DBQuery(0,query)
 ##############################################################################
 def DBQuery(Type,Query):
@@ -844,8 +847,9 @@ def Main():
 	logging("Config: pifacecommon version = %s " % pfcV.__version__)
 	
 	# GPIOB is the input ports. Set up interrupts
-	PiFace_Boards = 1
+	PiFace_Boards = int(GetConfig("piface_boards"))
 	PiFace_Inputs = 8
+	NO_NC = {0:'NC',1:'NO'}
 	###
 	for PiFace_Number in range(PiFace_Boards):
 		pifacedigitalio.init(PiFace_Number)
@@ -853,17 +857,17 @@ def Main():
 		pfd = pifacedigitalio.PiFaceDigital(hardware_addr=PiFace_Number)
 		listener = pifacedigitalio.InputEventListener(chip=pfd)
 		for i in range(PiFace_Inputs):
-			query = ("SELECT * FROM homepi.piface WHERE output=0 AND board=%d AND pin=%d;" % (PiFace_Number,i))
+			query = ("SELECT * FROM homepi.piface WHERE output=0 AND board=%d AND pin=%d AND node='%s';" % (PiFace_Number,i,HostName))
 			row = DBQuery(0,query)
-			PiFace_Name = str(row[6])
-			if bool(row[9]):
+			PiFace_Name = str(row[7])
+			if bool(row[10]):
 				#Device is NC pifacedigitalio.IODIR_FALLING_EDGE pifacecommon.interrupts.IODIR_OFF
 				listener.register(i, pifacedigitalio.IODIR_RISING_EDGE, event_interrupt, settle_time=0.1)
-				logging("Config: PiFace Board %s, Input %s-%s is NC." % (PiFace_Number,i,PiFace_Name))
 			else:
 				#Device is NO IODIR_FALLING_EDGE
 				listener.register(i, pifacedigitalio.IODIR_FALLING_EDGE, event_interrupt, settle_time=0.1)
-				logging("Config: PiFace Board %s, Input %s-%s is NO." % (PiFace_Number,i,PiFace_Name))
+				
+			logging("Config: Node %s, PiFace Board %s, Input %s-%s is %s." % (HostName,PiFace_Number,i,PiFace_Name,NO_NC[int(row[10])]))	
 			pifacedigitalio.digital_write_pullup(i, 1, hardware_addr=PiFace_Number)
 	###	
 	logging("Thread: Starting listener for %d interrupts!" % (int(PiFace_Boards * PiFace_Inputs)))
