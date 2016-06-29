@@ -683,7 +683,7 @@ def GetConfig(ConfigName):
 ##############################################################################
 def GetDevicebyID(PiFace_ID):
 	global HostName
-	query = ("SELECT * FROM `homepi`.`piface` WHERE `id`=%d AND `node`='s';" % (PiFace_ID, HostName))	
+	query = ("SELECT * FROM `homepi`.`piface` WHERE `id`=%d AND `node`='%s';" % (PiFace_ID, HostName))	
 	return DBQuery(0,query)
 ##############################################################################
 def DBQuery(Type,Query):
