@@ -221,12 +221,13 @@ def device_control(PiFace_ID,Pin_Value,AutoOff):
 	OnOff = {0:'off',1:'on'}
 	row = GetDevicebyID(PiFace_ID)
 	if (row):
-		PiFace_ID = int(row[0])
-		PiFace_Board = int(row[1])
-		PiFace_Pin = int(row[2])
-		PiFace_Status = int(row[3])
-		Zone_Number = int(row[4])
-		PiFace_Name = str(row[6])
+		#PiFace_ID = int(row[0])
+		PiFace_Node = row[1]
+		PiFace_Board = int(row[2])
+		PiFace_Pin = int(row[3])
+		PiFace_Status = int(row[4])
+		Zone_Number = int(row[5])
+		PiFace_Name = str(row[7])
 	else:
 		logging("Error: Invalid PiFace GetDevicebyID data at device_control.")
 		return
@@ -234,8 +235,8 @@ def device_control(PiFace_ID,Pin_Value,AutoOff):
 	if int(PiFace_Status) != int(Pin_Value):
 		pifacedigitalio.digital_write(PiFace_Pin, int(Pin_Value), PiFace_Board)
 		Zone_Name = GetZoneName(Zone_Number)
-		logging("Output: %d-%s %s has been set to %s. | Board: %s Pin: %s."  % (PiFace_ID, PiFace_Name, Zone_Name, OnOff[int(Pin_Value)], PiFace_Board, PiFace_Pin))
-		query = ("UPDATE `homepi`.`piface` SET `status`=%d WHERE `id`=%d;" % (Pin_Value, PiFace_ID))
+		logging("Node: %s set output: %d-%s %s has been set to %s. | Board: %s Pin: %s."  % (PiFace_Node, PiFace_ID, PiFace_Name, Zone_Name, OnOff[int(Pin_Value)], PiFace_Board, PiFace_Pin))
+		query = ("UPDATE `homepi`.`piface` SET `status`=%d WHERE `id`=%d ;" % (Pin_Value, PiFace_ID))
 		DBQuery(2,query)
 		
 		#if device is a light then turn off in X mins
@@ -683,6 +684,7 @@ def GetConfig(ConfigName):
 ##############################################################################
 def GetDevicebyID(PiFace_ID):
 	global HostName
+	#id, node, board, pin, status, zone, device, name, enabled, output, default_value, id, node, board, pin, id
 	query = ("SELECT * FROM `homepi`.`piface` WHERE `id`=%d AND `node`='%s';" % (PiFace_ID, HostName))	
 	return DBQuery(0,query)
 ##############################################################################
