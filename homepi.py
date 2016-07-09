@@ -583,20 +583,21 @@ def GetForcast(Period):
 		if not (json_string):
 			return Forecast		
 		parsed_json = json.loads(json_string)
+	
+		if int(Period) < 9:
+			for data in parsed_json['forecast']['txt_forecast']['forecastday']:
+				if int(Period) == int(data['period']):
+					Forecast = data['fcttext']
+					break
+		else:
+			Period = (int(Period) - 8)
+			for data in parsed_json['forecast']['simpleforecast']['forecastday']:
+				if int(Period) == int(data['period']):
+					Forecast = data['conditions']
+					break
 	except BaseException, e:
 		ExceptionHand(e,"GetForcast")
-		return Forecast	
-	if int(Period) < 9:
-		for data in parsed_json['forecast']['txt_forecast']['forecastday']:
-			if int(Period) == int(data['period']):
-				Forecast = data['fcttext']
-				break
-	else:
-		Period = (int(Period) - 8)
-		for data in parsed_json['forecast']['simpleforecast']['forecastday']:
-			if int(Period) == int(data['period']):
-				Forecast = data['conditions']
-				break
+		pass	
 	wurl.close()
 	return Forecast
 ##############################################################################
