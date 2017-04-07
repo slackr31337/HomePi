@@ -8,6 +8,8 @@
 
 
  PiFace board
+ 
+https://www.element14.com/community/community/raspberry-pi/raspberry-pi-accessories/piface-digital?ICID=rpiaccsy-access-products
 
 https://pypi.python.org/pypi/pifacedigitalio/
 
